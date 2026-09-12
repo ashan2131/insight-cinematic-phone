@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>in-SIGHT — Cinematic Phone</title>
+  <meta name="description" content="Cinematic 3D product site for in-SIGHT. Live app video on a floating phone, orbiting camera, glowing pedestal." />
+  <meta name="theme-color" content="#050814" />
+  <meta name="color-scheme" content="dark" />
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="./og.jpg" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="in-SIGHT — Cinematic Phone" />
+  <meta property="og:description" content="Live in-SIGHT UI on a floating 3D phone. Drag to orbit." />
+  <meta property="og:image" content="./og.jpg" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="in-SIGHT — Cinematic Phone" />
+  <meta name="twitter:image" content="./og.jpg" />
+  <style>
+    :root {
+      --navy: #050814;
+      --blue: #3aa0ff;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: var(--navy);
+      font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+      color: #e8eef8;
+    }
+    #stage {
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 70% 50% at 50% 18%, rgba(40, 90, 180, 0.22), transparent 55%),
+        radial-gradient(ellipse 60% 40% at 50% 88%, rgba(20, 80, 180, 0.18), transparent 60%),
+        #050814;
+    }
+    canvas { display: block; width: 100%; height: 100%; }
+    .vignette {
+      pointer-events: none;
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse at center, transparent 42%, rgba(0,0,0,0.55) 100%);
+      z-index: 2;
+    }
+    .hud {
+      position: fixed;
+      left: 24px;
+      bottom: 22px;
+      z-index: 3;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-width: min(420px, calc(100vw - 48px));
+    }
+    .brand {
+      letter-spacing: 0.28em;
+      font-size: 11px;
+      text-transform: uppercase;
+      color: #9bb4d4;
+    }
+    .brand strong {
+      color: #fff;
+      letter-spacing: 0.18em;
+      font-weight: 600;
+    }
+    .hint {
+      font-size: 12px;
+      color: #7f93ad;
+      line-height: 1.45;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    button {
+      appearance: none;
+      border: 1px solid rgba(120, 170, 230, 0.35);
+      background: rgba(8, 16, 32, 0.55);
+      color: #d7e6ff;
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      padding: 8px 12px;
+      border-radius: 999px;
+      cursor: pointer;
+      backdrop-filter: blur(10px);
+    }
+    button:hover { border-color: var(--blue); color: #fff; }
+    button.active {
+      background: rgba(40, 110, 210, 0.35);
+      border-color: var(--blue);
+    }
+    #screenVideo {
+      position: absolute;
+      width: 160px;
+      height: 284px;
+      left: -9999px;
+      top: 0;
+    }
+    .tap {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 4;
+      align-items: center;
+      justify-content: center;
+      background: rgba(5,8,16,0.55);
+      font-size: 13px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div id="stage"></div>
+  <div class="vignette"></div>
+  <div class="hud">
+    <div class="brand"><strong>in-SIGHT</strong> · manage what matters</div>
+    <div class="hint">Drag to orbit · scroll to dolly · the screen is the live InSight video</div>
+    <div class="controls">
+      <button id="btnTwirl" class="active">Twirl</button>
+      <button id="btnOrbit" class="active">Camera orbit</button>
+      <button id="btnPause">Pause motion</button>
+      <button id="btnReset">Reset</button>
+    </div>
+  </div>
+  <video id="screenVideo" src="./InSight-web.mp4" muted loop playsinline preload="auto"></video>
+  <div class="tap" id="tap">Tap to start</div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+
+    const stage = document.getElementById("stage");
+    const tap = document.getElementById("tap");
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    stage.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x050814, 0.035);
+
+    const camera = new THREE.PerspectiveCamera(32, window.innerWidth / window.innerHeight, 0.1, 80);
+    camera.position.set(0.35, 1.35, 7.1);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.06;
+    controls.enablePan = false;
+    controls.minDistance = 4.2;
+    controls.maxDistance = 11;
+    controls.minPolarAngle = 0.85;
+    controls.maxPolarAngle = 1.45;
+    controls.target.set(0, 1.22, 0);
+
+    scene.add(new THREE.AmbientLight(0x1a2740, 0.55));
+
+    const key = new THREE.SpotLight(0xd8e6ff, 18, 18, Math.PI / 5, 0.45, 1.4);
+    key.position.set(0.2, 8.5, 3.2);
+    key.castShadow = true;
+    key.shadow.mapSize.set(1024, 1024);
+    scene.add(key);
+
+    const rim = new THREE.DirectionalLight(0x4aa3ff, 2.2);
+    rim.position.set(-4, 2.4, -3);
+    scene.add(rim);
+
+    const fill = new THREE.PointLight(0x3d7dff, 6, 12, 2);
+    fill.position.set(3.2, 1.6, 2.4);
+    scene.add(fill);
+
+    const ringLight = new THREE.PointLight(0x3aa0ff, 8, 6, 2);
+    ringLight.position.set(0, 0.22, 0);
+    scene.add(ringLight);
+
+    const floor = new THREE.Mesh(
+      new THREE.CircleGeometry(5.2, 64),
+      new THREE.MeshStandardMaterial({ color: 0x05070d, roughness: 0.82, metalness: 0.08 })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    const pedestal = new THREE.Group();
+    const cap = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.28, 1.34, 0.38, 64),
+      new THREE.MeshStandardMaterial({ color: 0x0c1018, metalness: 0.62, roughness: 0.32 })
+    );
+    cap.position.y = 0.19;
+    cap.castShadow = true;
+    cap.receiveShadow = true;
+    pedestal.add(cap);
+
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(1.22, 0.028, 16, 80),
+      new THREE.MeshStandardMaterial({
+        color: 0x7ec8ff,
+        emissive: 0x3aa0ff,
+        emissiveIntensity: 6.5,
+        metalness: 0.1,
+        roughness: 0.18
+      })
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = 0.04;
+    pedestal.add(ring);
+
+    const glow = new THREE.Mesh(
+      new THREE.RingGeometry(0.9, 1.95, 64),
+      new THREE.MeshBasicMaterial({ color: 0x2f86ff, transparent: true, opacity: 0.22, side: THREE.DoubleSide })
+    );
+    glow.rotation.x = -Math.PI / 2;
+    glow.position.y = 0.006;
+    pedestal.add(glow);
+    scene.add(pedestal);
+
+    const PHONE_W = 1.18;
+    const PHONE_H = 2.42;
+    const PHONE_D = 0.11;
+
+    const phone = new THREE.Group();
+    phone.position.set(0, 1.58, 0);
+
+    const bodyMat = new THREE.MeshPhysicalMaterial({
+      color: 0x16181d,
+      metalness: 0.85,
+      roughness: 0.28,
+      clearcoat: 0.6,
+      clearcoatRoughness: 0.2
+    });
+
+    const body = new THREE.Mesh(
+      new RoundedBoxGeometry(PHONE_W, PHONE_H, PHONE_D, 8, 0.16),
+      bodyMat
+    );
+    body.castShadow = true;
+    phone.add(body);
+
+    const btnMat = new THREE.MeshStandardMaterial({ color: 0x2a2d33, metalness: 0.8, roughness: 0.32 });
+    const mute = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.12, 0.025), btnMat);
+    mute.position.set(-PHONE_W / 2 - 0.012, 0.72, 0);
+    phone.add(mute);
+    const volUp = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.22, 0.025), btnMat);
+    volUp.position.set(-PHONE_W / 2 - 0.012, 0.42, 0);
+    phone.add(volUp);
+    const volDn = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.22, 0.025), btnMat);
+    volDn.position.set(-PHONE_W / 2 - 0.012, 0.16, 0);
+    phone.add(volDn);
+    const power = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.32, 0.025), btnMat);
+    power.position.set(PHONE_W / 2 + 0.012, 0.38, 0);
+    phone.add(power);
+
+    const video = document.getElementById("screenVideo");
+    video.muted = true;
+    video.loop = true;
+    video.playsInline = true;
+
+    const videoTex = new THREE.VideoTexture(video);
+    videoTex.colorSpace = THREE.SRGBColorSpace;
+    videoTex.minFilter = THREE.LinearFilter;
+    videoTex.magFilter = THREE.LinearFilter;
+    videoTex.generateMipmaps = false;
+
+    const screenMat = new THREE.MeshBasicMaterial({
+      map: videoTex,
+      toneMapped: false
+    });
+    const screen = new THREE.Mesh(
+      new THREE.PlaneGeometry(PHONE_W * 0.88, PHONE_H * 0.90),
+      screenMat
+    );
+    screen.position.z = PHONE_D / 2 + 0.008;
+    phone.add(screen);
+
+    const island = new THREE.Mesh(
+      new RoundedBoxGeometry(0.34, 0.075, 0.02, 4, 0.03),
+      new THREE.MeshStandardMaterial({ color: 0x050505, roughness: 0.4, metalness: 0.2 })
+    );
+    island.position.set(0, PHONE_H * 0.385, PHONE_D / 2 + 0.014);
+    phone.add(island);
+
+    scene.add(phone);
+
+    const motion = {
+      twirl: true,
+      cameraOrbit: true,
+      paused: false,
+      t: 0
+    };
+
+    const btnTwirl = document.getElementById("btnTwirl");
+    const btnOrbit = document.getElementById("btnOrbit");
+    const btnPause = document.getElementById("btnPause");
+    const btnReset = document.getElementById("btnReset");
+
+    function setActive(btn, on) { btn.classList.toggle("active", on); }
+
+    btnTwirl.addEventListener("click", () => {
+      motion.twirl = !motion.twirl;
+      setActive(btnTwirl, motion.twirl);
+    });
+    btnOrbit.addEventListener("click", () => {
+      motion.cameraOrbit = !motion.cameraOrbit;
+      setActive(btnOrbit, motion.cameraOrbit);
+    });
+    btnPause.addEventListener("click", () => {
+      motion.paused = !motion.paused;
+      btnPause.textContent = motion.paused ? "Resume motion" : "Pause motion";
+    });
+    btnReset.addEventListener("click", () => {
+      motion.t = 0;
+      camera.position.set(0.35, 1.35, 7.1);
+      controls.target.set(0, 1.22, 0);
+      phone.rotation.set(0.08, 0.18, 0.02);
+    });
+
+    async function startMedia() {
+      try { await video.play(); } catch (_) {}
+      tap.style.display = "none";
+    }
+    video.addEventListener("canplay", () => startMedia());
+    document.body.addEventListener("pointerdown", startMedia, { once: true });
+    setTimeout(() => {
+      if (video.paused) tap.style.display = "flex";
+    }, 800);
+
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    const clock = new THREE.Clock();
+    phone.rotation.set(0.08, 0.18, 0.02);
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt = clock.getDelta();
+      if (!motion.paused) motion.t += dt;
+      const t = motion.t;
+      phone.position.y = 1.58 + Math.sin(t * 1.15) * 0.06;
+      if (motion.twirl) {
+        phone.rotation.y = Math.sin(t * 0.55) * 0.62;
+        phone.rotation.x = 0.10 + Math.sin(t * 0.33) * 0.07;
+        phone.rotation.z = Math.sin(t * 0.27) * 0.04;
+      }
+      ring.material.emissiveIntensity = 2.6 + Math.sin(t * 2.2) * 0.6;
+      ringLight.intensity = 7 + Math.sin(t * 2.2) * 1.4;
+      if (video.readyState >= 2) videoTex.needsUpdate = true;
+      if (motion.cameraOrbit && !motion.paused) {
+        const r = 7.05;
+        const a = 0.18 + Math.sin(t * 0.28) * 0.48;
+        camera.position.x = Math.sin(a) * r;
+        camera.position.z = Math.cos(a) * r;
+        camera.position.y = 1.32 + Math.sin(t * 0.22) * 0.16;
+        controls.target.set(0, 1.22, 0);
+      }
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+  </script>
+</body>
+</html>
